@@ -1,0 +1,38 @@
+Backend
+    Python 3.12
+    FastAPI
+    SQLAlchemy
+    PostgreSQL
+    Playwright
+    BeautifulSoup
+    APScheduler
+    AsyncIO
+
+Frontend
+    Next.js 15
+    TypeScript
+    TailwindCSS
+    shadcn/ui
+
+Infra
+    Docker
+    Docker Compose
+    Nginx
+
+PostgreSQL 
+CREATE TABLE jobs (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    company TEXT NOT NULL,
+    city TEXT,
+    region TEXT,
+    contract_type TEXT,
+    source TEXT,
+    url TEXT UNIQUE,
+    description TEXT,
+    salary TEXT,
+    remote_type TEXT,
+    posted_at TIMESTAMP,
+    tags TEXT[],
+    created_at TIMESTAMP DEFAULT NOW()
+);

@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+playwright
+beautifulsoup4
+httpx
+python-dotenv
+apscheduler
+asyncpg
+pydantic
