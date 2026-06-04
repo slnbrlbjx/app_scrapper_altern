@@ -38,4 +38,5 @@ async def send_discord_alert(job: dict):
             r = await client.post(WEBHOOK, json=payload)
             r.raise_for_status()
     except Exception as e:
-        logger.warning(f"Discord webhook error: {e}")
+        logger.warning("Discord webhook error: %s", e)
+

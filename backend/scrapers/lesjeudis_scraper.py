@@ -44,7 +44,7 @@ class LesJeudisScraper(BaseScraper):
                     "source": self.name,
                     "contract_type": "Alternance",
                 })
-        logger.info(f"[lesjeudis] {len(results)} jobs")
+        logger.info("[lesjeudis] %d jobs", len(results))
         return results
 
 
