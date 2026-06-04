@@ -7,6 +7,7 @@ import logging
 import asyncio
 from bs4 import BeautifulSoup
 from scrapers.base import BaseScraper
+from services.filter import is_cyber_job
 
 logger = logging.getLogger(__name__)
 
@@ -63,13 +64,6 @@ COMPANIES = {
     },
 }
 
-# Keywords to filter relevant cyber/alternance offers
-RELEVANT_KEYWORDS = [
-    "cyber", "sécurité", "security", "alternance", "apprentissage",
-    "soc", "siem", "pentest", "réseau", "cloud", "devops",
-]
-
-
 class CompaniesScraper(BaseScraper):
     name = "companies"
 
@@ -94,7 +88,7 @@ class CompaniesScraper(BaseScraper):
             if data and isinstance(data, list):
                 for job in data:
                     title = job.get("title", job.get("name", ""))
-                    if not self._is_relevant(title + " " + job.get("description", "")):
+                    if not is_cyber_job(title + " " + job.get("description", "")):
                         continue
                     results.append({
                         "title": title,
@@ -132,7 +126,7 @@ class CompaniesScraper(BaseScraper):
                 continue
 
             # Filter for relevant jobs
-            if not self._is_relevant(title_text):
+            if not is_cyber_job(title_text):
                 continue
 
             href = link_el["href"] if link_el else ""
@@ -154,11 +148,6 @@ class CompaniesScraper(BaseScraper):
 
         logger.info(f"[companies] {company_name}: {len(results)} jobs")
         return results
-
-    def _is_relevant(self, text: str) -> bool:
-        text_lower = text.lower()
-        return any(kw in text_lower for kw in RELEVANT_KEYWORDS)
-
 
 async def scrape_companies():
     return await CompaniesScraper().scrape()

@@ -1,8 +1,7 @@
-"""LinkedIn scraper — uses public job search RSS + HTML fallback."""
+"""LinkedIn scraper — public job search HTML."""
 import logging
-import feedparser
 from bs4 import BeautifulSoup
-from scrapers.base import BaseScraper
+from scrapers.base import BaseScraper, make_client
 
 logger = logging.getLogger(__name__)
 
@@ -14,29 +13,25 @@ class LinkedInScraper(BaseScraper):
     name = "linkedin"
 
     async def scrape(self) -> list[dict]:
-        jobs = []
-        for kw in KEYWORDS:
-            jobs += await self._scrape_keyword(kw)
-        return jobs
-
-    async def _scrape_keyword(self, keyword: str) -> list[dict]:
-        """LinkedIn public job search — HTML parsing (no auth needed)."""
         results = []
-        url = "https://www.linkedin.com/jobs/search/"
-        params = {
-            "keywords": keyword,
-            "location": LOCATION,
-            "f_JT": "I",  # Internship/alternance
-            "f_TP": "1,2",
-        }
-        html = await self.fetch(url, params=params)
-        if not html:
-            return results
+        async with make_client() as client:
+            for kw in KEYWORDS:
+                results += await self._scrape_keyword(kw, client)
+        if not results:
+            logger.warning("[linkedin] 0 jobs returned — selectors may be stale")
+        return results
 
+    async def _scrape_keyword(self, keyword: str, client) -> list[dict]:
+        html = await self.fetch(
+            "https://www.linkedin.com/jobs/search/",
+            params={"keywords": keyword, "location": LOCATION, "f_JT": "I", "f_TP": "1,2"},
+            client=client,
+        )
+        if not html:
+            return []
         soup = BeautifulSoup(html, "html.parser")
-        # LinkedIn public page card selectors (2024+)
-        cards = soup.select("div.base-card")
-        for card in cards:
+        results = []
+        for card in soup.select("div.base-card"):
             title_el = card.select_one("h3.base-search-card__title")
             company_el = card.select_one("h4.base-search-card__subtitle")
             location_el = card.select_one("span.job-search-card__location")
@@ -51,7 +46,7 @@ class LinkedInScraper(BaseScraper):
                 "source": self.name,
                 "contract_type": "Alternance",
             })
-        logger.info(f"[linkedin] {len(results)} jobs for '{keyword}'")
+        logger.info("[linkedin] %d jobs for '%s'", len(results), keyword)
         return results
 
 

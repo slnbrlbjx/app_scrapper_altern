@@ -1,36 +1,31 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.exc import OperationalError
+import logging
 import os
 import time
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@db:5432/jobs"
-)
+from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Retry logic for DB connection at startup
+logger = logging.getLogger(__name__)
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@db:5432/jobs")
+
 for attempt in range(10):
     try:
-        engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-        engine.connect()
+        engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=10)
+        engine.connect().close()
         break
     except OperationalError:
         if attempt == 9:
             raise
+        logger.info("DB not ready, retrying in 2s... (%d/10)", attempt + 1)
         time.sleep(2)
 
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
-
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
 def get_db():
-    """FastAPI dependency for DB sessions."""
     db = SessionLocal()
     try:
         yield db
@@ -38,20 +33,26 @@ def get_db():
         db.close()
 
 
-def save_jobs(jobs: list[dict], source: str):
-    """Upsert jobs into DB, skip duplicates by URL."""
+def save_jobs(jobs: list[dict], source: str) -> list[dict]:
+    """Upsert jobs by URL. Returns the list of dicts that were actually inserted."""
     from models.job import Job
+
+    if not jobs:
+        return []
+
     db = SessionLocal()
-    new_count = 0
+    inserted: list[dict] = []
     try:
+        urls = [j.get("url") for j in jobs if j.get("url")]
+        existing_urls = {
+            row[0]
+            for row in db.query(Job.url).filter(Job.url.in_(urls)).all()
+        }
         for job_data in jobs:
             url = job_data.get("url", "")
-            if not url:
+            if not url or url in existing_urls:
                 continue
-            existing = db.query(Job).filter(Job.url == url).first()
-            if existing:
-                continue
-            job = Job(
+            db.add(Job(
                 title=job_data.get("title", ""),
                 company=job_data.get("company", ""),
                 city=job_data.get("city", ""),
@@ -64,13 +65,12 @@ def save_jobs(jobs: list[dict], source: str):
                 remote_type=job_data.get("remote_type", ""),
                 tags=job_data.get("tags", []),
                 posted_at=job_data.get("posted_at"),
-            )
-            db.add(job)
-            new_count += 1
+            ))
+            inserted.append(job_data)
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise e
+        raise
     finally:
         db.close()
-    return new_count
+    return inserted

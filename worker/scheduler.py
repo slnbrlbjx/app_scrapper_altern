@@ -1,35 +1,29 @@
 """
-Scheduler: runs all scrapers every 30 minutes and saves results to DB.
+Scheduler: runs all scrapers every 30 minutes.
+Entrypoint: python -m worker.scheduler  (from /app)
 """
-import sys
-import os
 import asyncio
 import logging
 
-# Ensure backend modules are on the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from database.database import save_jobs
-from services.filter import is_cyber_job
 from services.discord import send_discord_alert
-
-# Import all scrapers
-from scrapers.linkedin_scraper import scrape_linkedin
-from scrapers.wttj_scraper import scrape_wttj
-from scrapers.hellowork_scraper import scrape_hellowork
+from services.filter import is_cyber_job
 from scrapers.apec_scraper import scrape_apec
+from scrapers.companies_scraper import scrape_companies
+from scrapers.discord_scraper import scrape_discord
+from scrapers.francetravail_scraper import scrape_francetravail
+from scrapers.hellowork_scraper import scrape_hellowork
 from scrapers.indeed_scraper import scrape_indeed
 from scrapers.lesjeudis_scraper import scrape_lesjeudis
-from scrapers.francetravail_scraper import scrape_francetravail
-from scrapers.reddit_scraper import scrape_reddit
-from scrapers.twitter_scraper import scrape_twitter
 from scrapers.linkedin_posts_scraper import scrape_linkedin_posts
-from scrapers.discord_scraper import scrape_discord
+from scrapers.linkedin_scraper import scrape_linkedin
+from scrapers.reddit_scraper import scrape_reddit
 from scrapers.telegram_scraper import scrape_telegram
-from scrapers.companies_scraper import scrape_companies
+from scrapers.twitter_scraper import scrape_twitter
+from scrapers.wttj_scraper import scrape_wttj
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,52 +49,52 @@ SCRAPERS = [
 
 
 async def run_scrapers():
-    logger.info("=== Starting scrape cycle ===")
+    logger.info("=== scrape cycle start ===")
     total_new = 0
 
     for source_name, scraper_fn in SCRAPERS:
         try:
-            logger.info(f"[{source_name}] Scraping...")
             jobs = await scraper_fn()
+            filtered = [
+                j for j in jobs
+                if is_cyber_job(f"{j.get('title', '')} {j.get('description', '')} {j.get('company', '')}")
+            ]
+            logger.info("[%s] %d found → %d relevant", source_name, len(jobs), len(filtered))
 
-            # Filter to cyber-relevant jobs only
-            filtered = [j for j in jobs if is_cyber_job(
-                f"{j.get('title', '')} {j.get('description', '')} {j.get('company', '')}"
-            )]
+            # save_jobs returns only the dicts that were actually inserted
+            new_jobs = save_jobs(filtered, source=source_name)
+            total_new += len(new_jobs)
 
-            logger.info(f"[{source_name}] {len(jobs)} found → {len(filtered)} relevant")
-
-            new_count = save_jobs(filtered, source=source_name)
-            total_new += new_count
-
-            # Discord alert for new jobs
-            if new_count > 0:
-                for job in filtered[:new_count]:  # Alert for genuinely new ones
-                    try:
-                        await send_discord_alert(job)
-                    except Exception as e:
-                        logger.warning(f"Discord alert failed: {e}")
+            # Alert on the real new ones, cap at 5 per source to avoid webhook spam
+            for job in new_jobs[:5]:
+                try:
+                    await send_discord_alert(job)
+                except Exception as e:
+                    logger.warning("Discord alert failed: %s", e)
 
         except Exception as e:
-            logger.error(f"[{source_name}] Scraper crashed: {e}", exc_info=True)
+            logger.error("[%s] crashed: %s", source_name, e, exc_info=True)
 
-    logger.info(f"=== Cycle done: {total_new} new jobs saved ===")
-
-
-def run():
-    asyncio.run(run_scrapers())
+    logger.info("=== cycle done: %d new jobs ===", total_new)
 
 
-scheduler = BlockingScheduler(timezone="Europe/Paris")
-scheduler.add_job(
-    run,
-    trigger=IntervalTrigger(minutes=30),
-    id="scrape_all",
-    name="Scrape all sources",
-    replace_existing=True,
-)
+async def main():
+    scheduler = AsyncIOScheduler(timezone="Europe/Paris")
+    scheduler.add_job(
+        run_scrapers,
+        trigger=IntervalTrigger(minutes=30),
+        id="scrape_all",
+        replace_existing=True,
+    )
+    logger.info("scheduler starting — running once immediately")
+    await run_scrapers()
+    scheduler.start()
+    # Keep the event loop alive
+    try:
+        await asyncio.Event().wait()
+    except (KeyboardInterrupt, SystemExit):
+        scheduler.shutdown()
+
 
 if __name__ == "__main__":
-    logger.info("Scheduler starting — first run immediately")
-    run()  # Run once on startup
-    scheduler.start()
+    asyncio.run(main())
