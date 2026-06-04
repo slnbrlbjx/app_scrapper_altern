@@ -1,7 +1,8 @@
-"""LinkedIn Posts scraper — scrapes public posts via Google search (LinkedIn blocks direct scraping)."""
+"""LinkedIn posts scraper — DuckDuckGo HTML search (no API key needed)."""
 import logging
+import urllib.parse
 from bs4 import BeautifulSoup
-from scrapers.base import BaseScraper
+from scrapers.base import BaseScraper, make_client
 
 logger = logging.getLogger(__name__)
 
@@ -16,40 +17,39 @@ class LinkedInPostsScraper(BaseScraper):
 
     async def scrape(self) -> list[dict]:
         results = []
-        for q in QUERIES:
-            # Use DuckDuckGo HTML search (no JS, no API key needed)
-            html = await self.fetch(
-                "https://html.duckduckgo.com/html/",
-                params={"q": q, "kl": "fr-fr"},
-            )
-            if not html:
-                continue
-            soup = BeautifulSoup(html, "html.parser")
-            for result in soup.select(".result"):
-                title_el = result.select_one(".result__title")
-                link_el = result.select_one("a.result__url, a[href*='linkedin.com']")
-                snippet_el = result.select_one(".result__snippet")
-                if not title_el:
+        async with make_client() as client:
+            for q in QUERIES:
+                html = await self.fetch(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": q, "kl": "fr-fr"},
+                    client=client,
+                )
+                if not html:
                     continue
-                href = ""
-                if link_el:
-                    href = link_el.get("href", "")
-                    # DuckDuckGo wraps URLs in redirect
-                    if "uddg=" in href:
-                        import urllib.parse
-                        qs = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
-                        href = qs.get("uddg", [""])[0]
-                if "linkedin.com" not in href:
-                    continue
-                results.append({
-                    "title": title_el.get_text(strip=True),
-                    "company": "",
-                    "url": href,
-                    "source": self.name,
-                    "description": snippet_el.get_text(strip=True) if snippet_el else "",
-                    "contract_type": "Post",
-                })
-        logger.info(f"[linkedin_posts] {len(results)} posts")
+                soup = BeautifulSoup(html, "html.parser")
+                for result in soup.select(".result"):
+                    title_el = result.select_one(".result__title")
+                    link_el = result.select_one("a.result__url, a[href*='linkedin.com']")
+                    snippet_el = result.select_one(".result__snippet")
+                    if not title_el:
+                        continue
+                    href = ""
+                    if link_el:
+                        href = link_el.get("href", "")
+                        if "uddg=" in href:
+                            qs = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                            href = qs.get("uddg", [""])[0]
+                    if "linkedin.com" not in href:
+                        continue
+                    results.append({
+                        "title": title_el.get_text(strip=True),
+                        "company": "",
+                        "url": href,
+                        "source": self.name,
+                        "description": snippet_el.get_text(strip=True) if snippet_el else "",
+                        "contract_type": "Post",
+                    })
+        logger.info("[linkedin_posts] %d posts", len(results))
         return results
 
 

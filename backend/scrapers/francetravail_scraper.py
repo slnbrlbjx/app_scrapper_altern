@@ -1,12 +1,11 @@
-"""France Travail (Pôle Emploi) scraper — official API v2."""
+"""France Travail (Pôle Emploi) scraper — official API v2 with HTML fallback."""
 import logging
 import os
-from scrapers.base import BaseScraper
+from bs4 import BeautifulSoup
+from scrapers.base import BaseScraper, make_client
 
 logger = logging.getLogger(__name__)
 
-# France Travail API requires client credentials (free registration)
-# https://francetravail.io/produits-et-services/api
 TOKEN_URL = "https://entreprise.francetravail.fr/connexion/oauth2/access_token"
 SEARCH_URL = "https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search"
 
@@ -16,15 +15,13 @@ CLIENT_SECRET = os.getenv("FRANCE_TRAVAIL_CLIENT_SECRET", "")
 
 class FranceTravailScraper(BaseScraper):
     name = "france_travail"
-    _token: str | None = None
 
     async def _get_token(self) -> str | None:
         if not CLIENT_ID or not CLIENT_SECRET:
-            logger.warning("[france_travail] No API credentials, using HTML fallback")
+            logger.warning("[france_travail] no API credentials, using HTML fallback")
             return None
-        import httpx
-        try:
-            async with httpx.AsyncClient() as client:
+        async with make_client() as client:
+            try:
                 r = await client.post(
                     TOKEN_URL,
                     data={
@@ -37,58 +34,56 @@ class FranceTravailScraper(BaseScraper):
                 )
                 r.raise_for_status()
                 return r.json().get("access_token")
-        except Exception as e:
-            logger.warning(f"[france_travail] Token error: {e}")
-            return None
+            except Exception as e:
+                logger.warning("[france_travail] token error: %s", e)
+                return None
 
     async def scrape(self) -> list[dict]:
         token = await self._get_token()
-        if token:
-            return await self._scrape_api(token)
-        return await self._scrape_html()
+        return await self._scrape_api(token) if token else await self._scrape_html()
 
     async def _scrape_api(self, token: str) -> list[dict]:
-        import httpx
-        results = []
-        try:
-            async with httpx.AsyncClient() as client:
+        async with make_client(json=True) as client:
+            try:
                 r = await client.get(
                     SEARCH_URL,
                     headers={"Authorization": f"Bearer {token}"},
                     params={
                         "motsCles": "cybersécurité",
-                        "typeContrat": "A",  # A = Alternance/Apprentissage
+                        "typeContrat": "A",
                         "range": "0-49",
                         "sort": "1",
                     },
                 )
                 r.raise_for_status()
                 data = r.json()
-                for offer in data.get("resultats", []):
-                    lieu = offer.get("lieuTravail", {})
-                    results.append({
-                        "title": offer.get("intitule", ""),
-                        "company": offer.get("entreprise", {}).get("nom", ""),
-                        "city": lieu.get("libelle", ""),
-                        "url": offer.get("origineOffre", {}).get("urlOrigine", f"https://candidat.francetravail.fr/offres/recherche/detail/{offer.get('id', '')}"),
-                        "source": self.name,
-                        "contract_type": "Alternance",
-                        "description": offer.get("description", ""),
-                        "salary": offer.get("salaire", {}).get("libelle", ""),
-                    })
-        except Exception as e:
-            logger.warning(f"[france_travail] API error: {e}")
-        logger.info(f"[france_travail] {len(results)} jobs via API")
+            except Exception as e:
+                logger.warning("[france_travail] API error: %s", e)
+                return []
+
+        results = []
+        for offer in data.get("resultats", []):
+            lieu = offer.get("lieuTravail", {})
+            results.append({
+                "title": offer.get("intitule", ""),
+                "company": offer.get("entreprise", {}).get("nom", ""),
+                "city": lieu.get("libelle", ""),
+                "url": offer.get("origineOffre", {}).get(
+                    "urlOrigine",
+                    f"https://candidat.francetravail.fr/offres/recherche/detail/{offer.get('id', '')}",
+                ),
+                "source": self.name,
+                "contract_type": "Alternance",
+                "description": offer.get("description", ""),
+                "salary": offer.get("salaire", {}).get("libelle", ""),
+            })
+        logger.info("[france_travail] %d jobs via API", len(results))
         return results
 
     async def _scrape_html(self) -> list[dict]:
-        from bs4 import BeautifulSoup
         html = await self.fetch(
             "https://candidat.francetravail.fr/offres/recherche",
-            params={
-                "motsCles": "cybersécurité",
-                "typeContrat": "A",
-            },
+            params={"motsCles": "cybersécurité", "typeContrat": "A"},
         )
         if not html:
             return []
@@ -108,7 +103,7 @@ class FranceTravailScraper(BaseScraper):
                 "source": self.name,
                 "contract_type": "Alternance",
             })
-        logger.info(f"[france_travail] {len(results)} jobs via HTML")
+        logger.info("[france_travail] %d jobs via HTML", len(results))
         return results
 
 

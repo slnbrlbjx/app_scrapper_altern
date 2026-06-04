@@ -1,17 +1,13 @@
-"""Cyber companies career pages scraper.
-
-Scrapes the careers/jobs pages of major French cybersecurity companies.
-Each company has its own careers URL and HTML structure.
-"""
-import logging
+"""Cyber companies career pages scraper."""
 import asyncio
+import logging
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
-from scrapers.base import BaseScraper
+from scrapers.base import BaseScraper, make_client
 from services.filter import is_cyber_job
 
 logger = logging.getLogger(__name__)
 
-# Map of company -> (careers URL, CSS selectors for job cards, title, link)
 COMPANIES = {
     "Advens": {
         "url": "https://www.advens.fr/carrieres",
@@ -64,80 +60,77 @@ COMPANIES = {
     },
 }
 
+
 class CompaniesScraper(BaseScraper):
     name = "companies"
 
     async def scrape(self) -> list[dict]:
+        # One shared client for all companies — sequential to avoid hammering sites
+        async with make_client() as html_client, make_client(json=True) as api_client:
+            tasks = [
+                self._scrape_company(name, cfg, html_client, api_client)
+                for name, cfg in COMPANIES.items()
+            ]
+            company_results = await asyncio.gather(*tasks, return_exceptions=True)
+
         results = []
-        tasks = [self._scrape_company(name, cfg) for name, cfg in COMPANIES.items()]
-        company_results = await asyncio.gather(*tasks, return_exceptions=True)
         for r in company_results:
             if isinstance(r, list):
                 results += r
             elif isinstance(r, Exception):
-                logger.warning(f"[companies] scraper error: {r}")
-        logger.info(f"[companies] {len(results)} total jobs")
+                logger.warning("[companies] scraper error: %s", r)
+        logger.info("[companies] %d total jobs", len(results))
         return results
 
-    async def _scrape_company(self, company_name: str, cfg: dict) -> list[dict]:
-        results = []
-
+    async def _scrape_company(
+        self, company_name: str, cfg: dict,
+        html_client, api_client,
+    ) -> list[dict]:
         # Try API first if available (OVHcloud)
         if "api" in cfg:
-            data = await self.fetch_json(cfg["api"])
+            data = await self.fetch_json(cfg["api"], client=api_client)
             if data and isinstance(data, list):
+                results = []
                 for job in data:
                     title = job.get("title", job.get("name", ""))
                     if not is_cyber_job(title + " " + job.get("description", "")):
                         continue
+                    loc = job.get("location", {})
                     results.append({
                         "title": title,
                         "company": company_name,
-                        "city": job.get("location", {}).get("city", "") if isinstance(job.get("location"), dict) else str(job.get("location", "")),
+                        "city": loc.get("city", "") if isinstance(loc, dict) else str(loc),
                         "url": job.get("url", job.get("apply_url", cfg["url"])),
                         "source": self.name,
                         "contract_type": job.get("contract_type", "Alternance"),
                         "description": job.get("description", "")[:500],
                     })
                 if results:
-                    logger.info(f"[companies] {company_name}: {len(results)} via API")
+                    logger.info("[companies] %s: %d via API", company_name, len(results))
                     return results
 
-        # HTML scraping
-        html = await self.fetch(cfg["url"])
+        html = await self.fetch(cfg["url"], client=html_client)
         if not html:
-            return results
+            return []
 
         soup = BeautifulSoup(html, "html.parser")
-        cards = soup.select(cfg["card"])
+        cards = soup.select(cfg["card"]) or soup.select("li, article, div[class]")
+        base = urlparse(cfg["url"])
 
-        if not cards:
-            # Fallback: try to find any links with job-related text
-            cards = soup.select("li, article, div[class]")
-
+        results = []
         for card in cards:
             title_el = card.select_one(cfg["title"])
             link_el = card.select_one(cfg["link"])
             if not title_el:
                 continue
-
             title_text = title_el.get_text(strip=True)
-            if not title_text or len(title_text) < 3:
+            if len(title_text) < 3 or not is_cyber_job(title_text):
                 continue
-
-            # Filter for relevant jobs
-            if not is_cyber_job(title_text):
-                continue
-
             href = link_el["href"] if link_el else ""
-            # Resolve relative URLs
             if href.startswith("/"):
-                from urllib.parse import urlparse
-                base = urlparse(cfg["url"])
                 href = f"{base.scheme}://{base.netloc}{href}"
             elif not href.startswith("http"):
                 href = cfg["url"]
-
             results.append({
                 "title": title_text,
                 "company": company_name,
@@ -145,9 +138,9 @@ class CompaniesScraper(BaseScraper):
                 "source": self.name,
                 "contract_type": "Alternance",
             })
-
-        logger.info(f"[companies] {company_name}: {len(results)} jobs")
+        logger.info("[companies] %s: %d jobs", company_name, len(results))
         return results
+
 
 async def scrape_companies():
     return await CompaniesScraper().scrape()

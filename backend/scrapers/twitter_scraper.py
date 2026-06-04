@@ -1,16 +1,11 @@
-"""X/Twitter scraper — uses Nitter public instances (no API key needed).
-
-Nitter is a privacy-focused Twitter frontend that exposes public tweets.
-We use the RSS feeds which are more stable than HTML scraping.
-"""
+"""X/Twitter scraper — Nitter public RSS feeds."""
+import asyncio
 import logging
 import feedparser
-import asyncio
-from scrapers.base import BaseScraper
+from scrapers.base import BaseScraper, make_client
 
 logger = logging.getLogger(__name__)
 
-# Public Nitter instances (some may be down — we try multiple)
 NITTER_INSTANCES = [
     "https://nitter.poast.org",
     "https://nitter.privacydev.net",
@@ -30,11 +25,11 @@ class TwitterScraper(BaseScraper):
 
     async def scrape(self) -> list[dict]:
         results = []
-        for term in SEARCH_TERMS:
-            for instance in NITTER_INSTANCES:
-                try:
+        async with make_client() as client:
+            for term in SEARCH_TERMS:
+                for instance in NITTER_INSTANCES:
                     feed_url = f"{instance}/search/rss?q={term.replace(' ', '+')}&f=tweets"
-                    html = await self.fetch(feed_url)
+                    html = await self.fetch(feed_url, client=client)
                     if not html:
                         continue
                     feed = feedparser.parse(html)
@@ -49,11 +44,9 @@ class TwitterScraper(BaseScraper):
                             "description": entry.get("summary", "")[:500],
                             "contract_type": "Tweet",
                         })
-                    break  # Success — no need to try other instances
-                except Exception as e:
-                    logger.debug(f"[twitter] {instance} failed: {e}")
-            await asyncio.sleep(1)
-        logger.info(f"[twitter] {len(results)} tweets")
+                    break
+                await asyncio.sleep(1)
+        logger.info("[twitter] %d tweets", len(results))
         return results
 
 

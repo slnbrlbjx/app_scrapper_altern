@@ -1,10 +1,10 @@
 """APEC scraper — official public JSON API."""
 import logging
+from bs4 import BeautifulSoup
 from scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-# APEC public search API (no auth required for basic search)
 API_URL = "https://www.apec.fr/cms/webservices/rechercheOffre/rechercheOffre"
 
 
@@ -12,7 +12,6 @@ class APECScraper(BaseScraper):
     name = "apec"
 
     async def scrape(self) -> list[dict]:
-        results = []
         payload = {
             "motsCles": "cybersécurité alternance",
             "typeContrat": [["ALTERNANCE"]],
@@ -22,8 +21,8 @@ class APECScraper(BaseScraper):
         }
         data = await self.fetch_json(API_URL, json_body=payload)
         if data:
-            for offer in data.get("resultats", []):
-                results.append({
+            results = [
+                {
                     "title": offer.get("intitule", ""),
                     "company": offer.get("nomEntreprise", ""),
                     "city": offer.get("lieuTravail", {}).get("libelle", ""),
@@ -32,21 +31,19 @@ class APECScraper(BaseScraper):
                     "contract_type": "Alternance",
                     "description": offer.get("texteOffre", ""),
                     "salary": offer.get("salaireTexte", ""),
-                })
+                }
+                for offer in data.get("resultats", [])
+            ]
         else:
-            # HTML fallback
-            results += await self._scrape_html()
-
-        logger.info(f"[apec] {len(results)} jobs")
+            results = await self._scrape_html()
+        logger.info("[apec] %d jobs", len(results))
         return results
 
     async def _scrape_html(self) -> list[dict]:
-        from bs4 import BeautifulSoup
-        url = "https://www.apec.fr/candidat/recherche-emploi.html"
-        html = await self.fetch(url, params={
-            "motsCles": "cybersécurité",
-            "typeContrat": "ALTERNANCE",
-        })
+        html = await self.fetch(
+            "https://www.apec.fr/candidat/recherche-emploi.html",
+            params={"motsCles": "cybersécurité", "typeContrat": "ALTERNANCE"},
+        )
         if not html:
             return []
         soup = BeautifulSoup(html, "html.parser")
